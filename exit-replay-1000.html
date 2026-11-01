@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>1000 Candle Exit Simulator</title>
+<style>
+ *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f6f7f9;color:#111}
+ .wrap{max-width:780px;margin:0 auto;padding:14px} h1{font-size:22px;margin:4px 0 2px;text-align:center}
+ .sub{text-align:center;color:#555;font-size:14px;margin-bottom:12px}
+ .card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:12px;margin-bottom:12px}
+ .row{display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;align-items:center}
+ .pill{background:#eef2ff;border:1px solid #c7d2fe;border-radius:999px;padding:6px 10px;font-weight:700;font-size:14px}
+ .pill.score{background:#ecfdf5;border-color:#6ee7b7} .pill.trade{background:#fff7ed;border-color:#fdba74}
+ canvas{width:100%;height:auto;display:block;background:#fff;border:1px solid #e5e7eb;border-radius:10px}
+ .info{font-size:16px;line-height:1.55;margin-top:10px} .blue{color:#1565c0}.red{color:#d32f2f}.green{color:#2e7d32}.orange{color:#e65100}
+ .feedback{min-height:58px;font-size:16px;font-weight:700;line-height:1.4;padding:10px;border-radius:10px;background:#fffde7;border:1px solid #e5e7eb}
+ .feedback.good{background:#ecfdf5;border-color:#6ee7b7;color:#065f46}.feedback.bad{background:#fef2f2;border-color:#fca5a5;color:#991b1b}
+ .btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;position:sticky;bottom:8px;background:#fff;padding:8px;border:1px solid #e5e7eb;border-radius:12px;z-index:5}
+ button{font-size:18px;font-weight:800;padding:15px 8px;border-radius:12px;border:2px solid #111;cursor:pointer;background:#fff}
+ button:disabled{opacity:.35;cursor:not-allowed}
+ .wide{grid-column:1/-1} #nextBtn{background:#111;color:#fff} #longBtn{background:#dcfce7} #shortBtn{background:#fee2e2}
+ #holdBtn{background:#e0f2fe} #outBtn{background:#ffedd5} #autoBtn{background:#ede9fe}
+ .small{text-align:center;color:#666;font-size:13px;margin-top:8px;line-height:1.5}
+ .logitem{border-top:1px solid #eee;padding:9px 2px;font-size:14px;line-height:1.5} .logitem:first-child{border-top:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+ <h1>1000 Candle Exit Simulator</h1>
+ <div class="sub">Candles come one by one. <b>You</b> decide: enter, hold, exit. I evaluate every trade.</div>
+
+ <div class="card row">
+   <span class="pill" id="candlePill">Candle: 0 / 1000</span>
+   <span class="pill trade" id="statusPill">FLAT — no trade</span>
+   <span class="pill score" id="scorePill">Trades: 0 · Clean: 0</span>
+ </div>
+
+ <div class="card">
+   <canvas id="chart" width="700" height="400"></canvas>
+   <div class="info" id="info">Press NEXT CANDLE. When you see a place you want, press ENTER LONG or ENTER SHORT at that candle's close.</div>
+   <div class="feedback" id="feedback" style="margin-top:10px">Ready. Press NEXT CANDLE.</div>
+   <div class="btns">
+     <button id="nextBtn" class="wide">▶ NEXT CANDLE</button>
+     <button id="longBtn" disabled>ENTER LONG</button>
+     <button id="shortBtn" disabled>ENTER SHORT</button>
+     <button id="holdBtn" disabled>HOLD</button>
+     <button id="outBtn" disabled>OUT — EXIT NOW</button>
+     <button id="autoBtn" class="wide">AUTO: OFF (tap for hands-free candles)</button>
+   </div>
+   <div class="small"><button id="restartBtn" style="font-size:14px;padding:8px 14px;border-width:1px">Restart (new 1000 candles)</button></div>
+ </div>
+
+ <div class="card">
+   <div style="font-weight:800;margin-bottom:6px">Your fixed rules for every trade (set before entry, never change inside):</div>
+   <div style="font-size:15px;line-height:1.6">
+     LONG: SL = entry − 20 · TP = entry + 40 · EXIT LINE = entry − 10<br>
+     SHORT: SL = entry + 20 · TP = entry − 40 · EXIT LINE = entry + 10<br>
+     OUT when a candle <b>closes</b> past your EXIT LINE. Max hold = <b>10 candles</b>, then time OUT.<br>
+     SL / TP touched inside a candle = trade closes automatically.
+   </div>
+ </div>
+
+ <div class="card">
+   <div style="font-weight:800;font-size:17px;margin-bottom:4px">My evaluation of your trades</div>
+   <div id="totals" style="font-size:15px;line-height:1.6">No trades yet. P&L points are shown separately — your grade is only about execution: did you exit at your line / on time, and not early for no reason?</div>
+   <div id="log"></div>
+ </div>
+
+ <div class="small">This is a practice simulator with generated NQ-style 15m candles — not real market data and not trading advice. It trains one thing: your entry / hold / exit decisions, candle by candle.</div>
+</div>
+
+<script>
+// ---------- candle generation: 1000 candles, regime-shifting random walk ----------
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;}}
+let seed=(Math.random()*1e9)|0;
+let rand=mulberry32(seed);
+function genCandles(){
+  const out=[]; let price=25000; let drift=0; let left=0;
+  for(let i=0;i<1000;i++){
+    if(left<=0){ drift=(rand()*2-1)*0.9; left=40+((rand()*40)|0); }
+    left--;
+    const vol=6+rand()*8;
+    const o=price;
+    let c=o+drift+(rand()*2-1)*vol;
+    const h=Math.max(o,c)+rand()*7;
+    const l=Math.min(o,c)-rand()*7;
+    out.push({o:Math.round(o),h:Math.round(h),l:Math.round(l),c:Math.round(c)});
+    price=c;
+  }
+  return out;
+}
+let candles=genCandles();
+
+// ---------- state ----------
+let idx=-1;               // last revealed candle index
+let trade=null;           // {dir,entry,entryIdx,sl,tp,exitLine,held,mistakes[],correctHolds}
+let history=[];           // closed trade evaluations
+let awaiting=false;       // a candle is revealed in-trade and HOLD/OUT is owed
+let auto=false, timer=null;
+let markers=[];           // rule-break highlights: {idx, label} — drawn on the chart at that candle
+
+const $=id=>document.getElementById(id);
+const canvas=$('chart'), ctx=canvas.getContext('2d');
+function fmt(n){return (n>0&&arguments[1]==='sign')? '+'+n.toLocaleString('en-US') : n.toLocaleString('en-US');}
+function cur(){return candles[idx];}
+
+function shouldExit(){
+  if(!trade) return {yes:false};
+  const c=cur();
+  if(trade.dir==='LONG' && c.c < trade.exitLine) return {yes:true, why:'candle closed BELOW your EXIT LINE '+fmt(trade.exitLine)};
+  if(trade.dir==='SHORT' && c.c > trade.exitLine) return {yes:true, why:'candle closed ABOVE your EXIT LINE '+fmt(trade.exitLine)};
+  if(trade.held>=10) return {yes:true, why:'10 candles are up — time exit'};
+  return {yes:false};
+}
+function autoHit(){
+  if(!trade) return null;
+  const c=cur();
+  if(trade.dir==='LONG'){
+    if(c.l<=trade.sl) return {price:trade.sl, kind:'SL'};
+    if(c.h>=trade.tp) return {price:trade.tp, kind:'TP'};
+  } else {
+    if(c.h>=trade.sl) return {price:trade.sl, kind:'SL'};
+    if(c.l<=trade.tp) return {price:trade.tp, kind:'TP'};
+  }
+  return null;
+}
+
+// ---------- drawing: last 30 candles ----------
+function draw(){
+  const W=canvas.width,H=canvas.height,padL=54,padR=142,padT=16,padB=26;
+  ctx.clearRect(0,0,W,H);
+  if(idx<0){ ctx.fillStyle='#111'; ctx.font='bold 18px system-ui'; ctx.textAlign='center'; ctx.fillText('Press NEXT CANDLE',(W-padR)/2+padL/2,H/2); ctx.textAlign='left'; return; }
+  const start=Math.max(0,idx-29), vis=candles.slice(start,idx+1);
+  let mn=Math.min(...vis.map(c=>c.l)), mx=Math.max(...vis.map(c=>c.h));
+  if(trade){ mn=Math.min(mn,trade.sl,trade.tp,trade.exitLine,trade.entry); mx=Math.max(mx,trade.sl,trade.tp,trade.exitLine,trade.entry); }
+  const span=(mx-mn)||20; mn-=span*0.15; mx+=span*0.15;
+  const step=(W-padL-padR)/30, X=i=>padL+(i-start+0.5)*step, Y=v=>padT+(mx-v)/((mx-mn)||1)*(H-padT-padB);
+  ctx.font='12px system-ui'; ctx.fillStyle='#666'; ctx.strokeStyle='#eee';
+  for(let g=0;g<5;g++){ const v=mn+(mx-mn)*g/4,y=Y(v); ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke(); ctx.fillText(fmt(Math.round(v)),4,y+4); }
+  if(trade){
+    const levels=[[trade.sl,'#d32f2f','STOP LOSS '+fmt(trade.sl)],[trade.exitLine,'#f57c00','EXIT LINE '+fmt(trade.exitLine)],[trade.entry,'#1565c0','ENTRY '+trade.dir+' '+fmt(trade.entry)],[trade.tp,'#2e7d32','TAKE PROFIT '+fmt(trade.tp)]];
+    levels.forEach(([v,col,txt])=>{ const y=Y(v); if(y<padT-4||y>H-padB+4) return; ctx.strokeStyle=col; ctx.lineWidth=2; ctx.setLineDash(v===trade.exitLine?[7,5]:[]); ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-6,y); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth=1;
+      ctx.fillStyle='#fff'; const w=ctx.measureText(txt).width+14; ctx.fillRect(W-padR+8,y-11,w,22); ctx.strokeStyle=col; ctx.strokeRect(W-padR+8,y-11,w,22); ctx.fillStyle=col; ctx.font='bold 12px system-ui'; ctx.fillText(txt,W-padR+15,y+4); ctx.font='12px system-ui'; });
+  }
+  vis.forEach((c,i)=>{ const x=X(start+i); const ci=start+i;
+    if(markers.some(m=>m.idx===ci)){ // red band behind a rule-break candle
+      ctx.fillStyle='rgba(211,47,47,0.13)'; ctx.fillRect(x-step/2,padT,step,H-padT-padB);
+    }
+    ctx.strokeStyle='#111'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,Y(c.h)); ctx.lineTo(x,Y(c.l)); ctx.stroke();
+    const col=c.c>=c.o?'#26a69a':'#ef5350'; ctx.fillStyle=col; ctx.strokeStyle='#111'; const y1=Y(Math.max(c.o,c.c)),y2=Y(Math.min(c.o,c.c)); const bw=Math.max(6,step*0.62);
+    ctx.fillRect(x-bw/2,y1,bw,Math.max(3,y2-y1)); ctx.strokeRect(x-bw/2,y1,bw,Math.max(3,y2-y1)); });
+  // rule-break badges: red ✗ circle above the candle + label below it
+  markers.filter(m=>m.idx>=start && m.idx<=idx).forEach(m=>{
+    const c=candles[m.idx], x=X(m.idx);
+    const topY=Math.max(padT+11, Y(c.h)-16);
+    ctx.beginPath(); ctx.arc(x,topY,10,0,Math.PI*2); ctx.fillStyle='#d32f2f'; ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke();
+    ctx.fillStyle='#fff'; ctx.font='bold 13px system-ui'; ctx.textAlign='center'; ctx.fillText('✗',x,topY+4.5);
+    ctx.font='bold 10px system-ui'; ctx.fillStyle='#d32f2f';
+    ctx.fillText('RULE',x,Y(c.l)+24); ctx.fillText('BROKEN',x,Y(c.l)+36);
+    ctx.textAlign='left';
+  });
+  // current close marker
+  ctx.fillStyle='#111'; ctx.font='bold 12px system-ui'; ctx.fillText('Close '+fmt(cur().c), padL, H-8);
+}
+
+// ---------- UI refresh ----------
+function setFb(t,cls){ const f=$('feedback'); f.textContent=t; f.className='feedback '+(cls||''); }
+function refresh(){
+  $('candlePill').textContent='Candle: '+(idx+1)+' / 1000';
+  if(trade){
+    $('statusPill').textContent='IN TRADE — '+trade.dir+' @ '+fmt(trade.entry)+' · held '+trade.held+' / 10 candles';
+    const c=cur(); const floatPnl=trade.dir==='LONG'? c.c-trade.entry : trade.entry-c.c;
+    $('info').innerHTML='<b>'+trade.dir+'</b> entry <span class="blue"><b>'+fmt(trade.entry)+'</b></span> · floating <b>'+fmt(floatPnl,'sign')+' pts</b><br>'+
+      '<span class="red">SL '+fmt(trade.sl)+'</span> · <span class="green">TP '+fmt(trade.tp)+'</span> · <span class="orange"><b>EXIT LINE '+fmt(trade.exitLine)+'</b></span><br>'+
+      'Candle close: <b>'+fmt(c.c)+'</b>. '+(awaiting?'Now decide: HOLD or OUT.':'Press NEXT CANDLE for the next candle in your trade.');
+  } else {
+    $('statusPill').textContent='FLAT — no trade';
+    if(idx>=0) $('info').innerHTML='Last candle close: <b>'+fmt(cur().c)+'</b>. Press NEXT CANDLE to keep watching, or ENTER at this close.';
+  }
+  const clean=history.filter(h=>h.mistakes.length===0).length;
+  $('scorePill').textContent='Trades: '+history.length+' · Clean: '+clean;
+  $('nextBtn').disabled = awaiting || idx>=999;
+  $('longBtn').disabled = !!trade || idx<0 || awaiting;
+  $('shortBtn').disabled = !!trade || idx<0 || awaiting;
+  $('holdBtn').disabled = !awaiting;
+  $('outBtn').disabled = !awaiting;
+  draw();
+}
+function renderTotals(){
+  if(!history.length) return;
+  const totalPnl=history.reduce((s,h)=>s+h.pnl,0);
+  const clean=history.filter(h=>h.mistakes.length===0).length;
+  const avg=Math.round(history.reduce((s,h)=>s+h.exec,0)/history.length);
+  $('totals').innerHTML='Trades closed: <b>'+history.length+'</b> · Clean trades: <b>'+clean+' / '+history.length+'</b> · Average execution: <b>'+avg+' / 100</b> · Total P&L: <b>'+fmt(totalPnl,'sign')+' pts</b> (P&L is not your grade)';
+  $('log').innerHTML=history.slice().reverse().map(h=>
+    '<div class="logitem"><b>Trade '+h.n+': '+h.dir+' '+fmt(h.entry)+' → '+fmt(h.exit)+' · '+fmt(h.pnl,'sign')+' pts · held '+h.held+' candles</b><br>'+
+    'Exit: '+h.reason+'<br>Execution: <b>'+h.exec+' / 100 — '+h.grade+'</b>'+
+    (h.mistakes.length? '<br>Mistakes: '+h.mistakes.join(' · ') : '<br>No mistakes. You followed your own rules.')+'</div>').join('');
+}
+
+// ---------- actions ----------
+function nextCandle(){
+  if(awaiting || idx>=999) return;
+  idx++;
+  if(trade){
+    trade.held++;
+    const hit=autoHit();
+    if(hit){ closeTrade(hit.price, hit.kind==='TP' ? 'Take profit hit inside the candle — automatic exit' : 'Stop loss hit inside the candle — automatic exit'); return; }
+    if(idx>=999){ closeTrade(cur().c,'Data ended — closed at last close'); return; }
+    awaiting=true;
+    setFb('Candle '+(idx+1)+' in your trade closed at '+fmt(cur().c)+'. Look at the chart vs your EXIT LINE. HOLD or OUT?','');
+  } else {
+    setFb('Candle '+(idx+1)+' closed at '+fmt(cur().c)+'. Watch, or ENTER at this close.','');
+    if(idx>=999) setFb('All 1000 candles done. Restart for a new set.','good');
+  }
+  refresh();
+}
+function enter(dir){
+  if(trade || idx<0 || awaiting) return;
+  const e=cur().c;
+  trade={dir:dir, entry:e, entryIdx:idx,
+    sl: dir==='LONG'? e-20 : e+20,
+    tp: dir==='LONG'? e+40 : e-40,
+    exitLine: dir==='LONG'? e-10 : e+10,
+    held:0, mistakes:[], correctHolds:0};
+  setFb('IN. '+dir+' at '+fmt(e)+'. SL / TP / EXIT LINE are set now — before the trade moves. That part is a pass, every time, in this simulator. Next: manage it candle by candle.','good');
+  refresh();
+}
+function choose(act){
+  if(!awaiting || !trade) return;
+  const se=shouldExit(); const c=cur();
+  awaiting=false;
+  if(act==='OUT'){
+    if(se.yes){ closeTrade(c.c, 'You pressed OUT on the trigger — '+se.why); return; }
+    markers.push({idx:idx, label:'EARLY OUT — NO TRIGGER'});
+    trade.mistakes.push('Early OUT at candle '+(idx+1)+' — no trigger: close '+fmt(c.c)+' had not crossed your EXIT LINE and time was not up');
+    closeTrade(c.c, 'You pressed OUT early — no trigger had hit');
+    return;
+  }
+  // HOLD
+  if(se.yes){
+    markers.push({idx:idx, label:'HELD PAST EXIT — '+se.why});
+    trade.mistakes.push('Missed exit at candle '+(idx+1)+' — '+se.why+', but you pressed HOLD');
+    setFb('❌ Missed exit. '+se.why+'. You held. Look at the chart — that candle is now marked with a red ✗ RULE BROKEN highlight. That mistake stays on this trade\u2019s record — now keep managing it, the same rule still applies.','bad');
+  } else {
+    trade.correctHolds++;
+    setFb('✅ Correct HOLD at candle '+(idx+1)+'. No trigger. Press NEXT CANDLE.','good');
+  }
+  refresh();
+}
+function closeTrade(exitPrice, reason){
+  const pnl=trade.dir==='LONG'? exitPrice-trade.entry : trade.entry-exitPrice;
+  const exec=Math.max(0, 100 - trade.mistakes.length*30);
+  const grade= trade.mistakes.length===0 ? 'A — Clean' : (trade.mistakes.length===1 ? 'B — 1 mistake' : 'F — Rules broken '+trade.mistakes.length+' times');
+  history.push({n:history.length+1, dir:trade.dir, entry:trade.entry, exit:exitPrice, pnl:pnl, held:trade.held, reason:reason, mistakes:trade.mistakes.slice(), exec:exec, grade:grade});
+  setFb((trade.mistakes.length===0?'✅ ':'⚠️ ')+'Trade closed: '+trade.dir+' '+fmt(trade.entry)+' → '+fmt(exitPrice)+' · '+fmt(pnl,'sign')+' pts. '+reason+'. Execution '+exec+'/100 — '+grade+'.', trade.mistakes.length===0?'good':'bad');
+  trade=null; awaiting=false;
+  renderTotals(); refresh();
+}
+
+// ---------- buttons / auto ----------
+$('nextBtn').onclick=nextCandle;
+$('longBtn').onclick=()=>enter('LONG');
+$('shortBtn').onclick=()=>enter('SHORT');
+$('holdBtn').onclick=()=>choose('HOLD');
+$('outBtn').onclick=()=>choose('OUT');
+$('autoBtn').onclick=()=>{
+  auto=!auto;
+  $('autoBtn').textContent=auto?'AUTO: ON — candles every 1 sec, pauses when you must decide':'AUTO: OFF (tap for hands-free candles)';
+  if(auto && !timer){ timer=setInterval(()=>{ if(auto && !awaiting) nextCandle(); },1000); }
+};
+$('restartBtn').onclick=()=>{ seed=(Math.random()*1e9)|0; rand=mulberry32(seed); candles=genCandles(); idx=-1; trade=null; history=[]; markers=[]; awaiting=false; auto=false; $('autoBtn').textContent='AUTO: OFF (tap for hands-free candles)';
+  $('log').innerHTML=''; $('totals').textContent='No trades yet.'; setFb('New 1000 candles. Press NEXT CANDLE.',''); refresh(); };
+
+window.__sim={ getState:()=>({idx:idx, inTrade:!!trade, trade:trade?{dir:trade.dir,entry:trade.entry,held:trade.held,mistakes:trade.mistakes.length}:null, awaiting:awaiting, markers:markers.map(m=>({idx:m.idx,label:m.label})), history:history.map(h=>({pnl:h.pnl,exec:h.exec,mistakes:h.mistakes.length,reason:h.reason}))}),
+  candles:()=>candles, next:nextCandle, enter:enter, choose:choose };
+
+refresh();
+</script>
+</body>
+</html>

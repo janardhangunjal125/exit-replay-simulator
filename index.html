@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exit Replay Simulator</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f6f7f9;color:#111}
+  .wrap{max-width:760px;margin:0 auto;padding:14px}
+  h1{font-size:22px;margin:4px 0 2px;text-align:center}
+  .sub{text-align:center;color:#555;font-size:14px;margin-bottom:12px}
+  .card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:12px;margin-bottom:12px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;align-items:center}
+  .pill{background:#eef2ff;border:1px solid #c7d2fe;border-radius:999px;padding:6px 10px;font-weight:700;font-size:14px}
+  .pill.score{background:#ecfdf5;border-color:#6ee7b7}
+  canvas{width:100%;height:auto;display:block;background:#fff;border:1px solid #e5e7eb;border-radius:10px}
+  .info{font-size:16px;line-height:1.55}
+  .info b{font-size:17px}
+  .blue{color:#1565c0}.red{color:#d32f2f}.green{color:#2e7d32}.orange{color:#e65100}
+  .feedback{min-height:64px;font-size:17px;font-weight:700;line-height:1.4;padding:10px;border-radius:10px;background:#fffde7;border:1px solid #e5e7eb}
+  .feedback.good{background:#ecfdf5;border-color:#6ee7b7;color:#065f46}
+  .feedback.bad{background:#fef2f2;border-color:#fca5a5;color:#991b1b}
+  .btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  button{font-size:19px;font-weight:800;padding:16px 10px;border-radius:12px;border:2px solid #111;cursor:pointer;background:#fff}
+  button:disabled{opacity:.35;cursor:not-allowed}
+  #nextBtn{grid-column:1/-1;background:#111;color:#fff}
+  #holdBtn{background:#e0f2fe}
+  #outBtn{background:#ffedd5}
+  .small{text-align:center;color:#666;font-size:13px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Exit Replay Simulator</h1>
+  <div class="sub">One trade. One chart. Only HOLD or OUT.</div>
+
+  <div class="card row">
+    <span class="pill" id="tradePill">Trade 1 / 5</span>
+    <span class="pill score" id="scorePill">Score: 0 / 5</span>
+    <span class="pill" id="candlePill">Candle: 0 / 3</span>
+  </div>
+
+  <div class="card">
+    <canvas id="chart" width="700" height="420"></canvas>
+    <div class="info" id="info" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card">
+    <div class="feedback" id="feedback">Press NEXT CANDLE to start.</div>
+    <div class="btns">
+      <button id="nextBtn">▶ NEXT CANDLE</button>
+      <button id="holdBtn" disabled>HOLD</button>
+      <button id="outBtn" disabled>OUT — EXIT NOW</button>
+    </div>
+    <div class="small"><button id="restartBtn" style="font-size:14px;padding:8px 14px;border-width:1px">Restart simulator</button></div>
+  </div>
+
+  <div class="small">Rule: Candle closes past the orange EXIT LINE = OUT. SL / TP hit inside a candle = trade closes automatically. After last candle = time OUT.</div>
+</div>
+
+<script>
+const TRADES = [
+  {
+    name:"NQ 15m — SHORT", dir:"SHORT", entry:25000, sl:25020, tp:24980, exitLine:25010,
+    exitText:"OUT if candle CLOSES above 25,010",
+    candles:[
+      {o:25000,h:25002,l:24988,c:24995, action:"HOLD", why:"Close 24,995 is below the EXIT LINE. No reason to exit."},
+      {o:24995,h:25018,l:24993,c:25014, action:"OUT",  why:"Close 25,014 is ABOVE the EXIT LINE 25,010. You must exit here. Loss -14.", failNext:"You held. Next candle hits STOP LOSS 25,020. Loss -20 instead of -14."},
+      {o:25014,h:25024,l:25012,c:25022, action:"AUTO", why:"Stop loss hit."}
+    ]
+  },
+  {
+    name:"NQ 15m — LONG", dir:"LONG", entry:25000, sl:24980, tp:25040, exitLine:24990,
+    exitText:"OUT if candle CLOSES below 24,990",
+    candles:[
+      {o:25000,h:25022,l:24996,c:25018, action:"HOLD", why:"Close 25,018 is above the EXIT LINE. Trade is fine."},
+      {o:25018,h:25042,l:25015,c:25038, action:"AUTO_TP", why:"High 25,042 hit TAKE PROFIT 25,040 inside this candle. Trade closes automatically. Profit +40. Your job was just to HOLD till here."},
+      {o:25038,h:25040,l:25030,c:25035, action:"AUTO", why:"Trade already closed."}
+    ]
+  },
+  {
+    name:"NQ 15m — LONG", dir:"LONG", entry:25000, sl:24980, tp:25040, exitLine:24990,
+    exitText:"OUT if candle CLOSES below 24,990 — OR after Candle 3 (time exit)",
+    candles:[
+      {o:25000,h:25014,l:24994,c:25008, action:"HOLD", why:"Close 25,008 is above the EXIT LINE. Hold."},
+      {o:25008,h:25010,l:24992,c:24998, action:"HOLD", why:"Dip went low, but CLOSE 24,998 is still above EXIT LINE 24,990. Wick does not count for the exit line. Hold."},
+      {o:24998,h:25016,l:24995,c:25012, action:"OUT",  why:"This was Candle 3 — time is up. Time OUT here, profit +12. No more holding.", failNext:"Time exit missed. In a real trade this is where a small win turns into a loss."}
+    ]
+  },
+  {
+    name:"NQ 15m — SHORT", dir:"SHORT", entry:25000, sl:25020, tp:24960, exitLine:25010,
+    exitText:"OUT if candle CLOSES above 25,010",
+    candles:[
+      {o:25000,h:25008,l:24984,c:24990, action:"HOLD", why:"Close 24,990, price moving your way. Hold."},
+      {o:24990,h:25024,l:24986,c:25016, action:"AUTO_SL", why:"High 25,024 hit STOP LOSS 25,020 inside this candle. Trade closes automatically. Loss -20. No HOLD / OUT choice — SL does the exit, if you placed it at entry."},
+      {o:25016,h:25020,l:25005,c:25010, action:"AUTO", why:"Trade already closed."}
+    ]
+  },
+  {
+    name:"BTC 15m — LONG", dir:"LONG", entry:108000, sl:107850, tp:108300, exitLine:107925,
+    exitText:"OUT if candle CLOSES below 107,925",
+    candles:[
+      {o:108000,h:108140,l:107980,c:108100, action:"HOLD", why:"Close 108,100 is above the EXIT LINE. Hold."},
+      {o:108100,h:108120,l:107860,c:107900, action:"OUT",  why:"Close 107,900 is BELOW the EXIT LINE 107,925. Exit here. Loss -100.", failNext:"You held. Next candle hits STOP LOSS 107,850. Loss -150 instead of -100."},
+      {o:107900,h:107920,l:107840,c:107860, action:"AUTO", why:"Stop loss hit."}
+    ]
+  }
+];
+
+let ti=0, ci=-1, score=0, tradeClean=true, awaiting=false, finished=false;
+const $=id=>document.getElementById(id);
+const canvas=$('chart'), ctx=canvas.getContext('2d');
+
+function fmt(n){return n.toLocaleString('en-US');}
+function trade(){return TRADES[ti];}
+
+function draw(){
+  const t=trade();
+  const W=canvas.width,H=canvas.height, padL=58, padR=150, padT=18, padB=34;
+  const vals=[t.sl,t.tp,t.entry,t.exitLine];
+  t.candles.slice(0,ci+1).forEach(c=>{vals.push(c.h,c.l);});
+  let mn=Math.min(...vals), mx=Math.max(...vals); const span=(mx-mn)||20; mn-=span*0.18; mx+=span*0.18;
+  const X=i=>padL+(i+0.5)*((W-padL-padR)/3);
+  const Y=v=>padT+(mx-v)/((mx-mn)||1)*(H-padT-padB);
+  ctx.clearRect(0,0,W,H);
+  // grid + y labels
+  ctx.font='12px system-ui'; ctx.fillStyle='#666'; ctx.strokeStyle='#eee';
+  for(let g=0; g<5; g++){ const v=mn+(mx-mn)*g/4, y=Y(v); ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke(); ctx.fillText(fmt(Math.round(v)), 6, y+4);}
+  // levels
+  const levels=[[t.sl,'#d32f2f','STOP LOSS '+fmt(t.sl)], [t.exitLine,'#f57c00','EXIT LINE '+fmt(t.exitLine)], [t.entry,'#1565c0','ENTRY '+t.dir+' '+fmt(t.entry)], [t.tp,'#2e7d32','TAKE PROFIT '+fmt(t.tp)]];
+  levels.forEach(([v,col,txt])=>{ const y=Y(v); ctx.strokeStyle=col; ctx.lineWidth=2; ctx.setLineDash(v===t.exitLine?[7,5]:[]); ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-6,y); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth=1;
+    ctx.fillStyle='#fff'; const w=ctx.measureText(txt).width+14; ctx.fillRect(W-padR+8,y-11,w,22); ctx.strokeStyle=col; ctx.strokeRect(W-padR+8,y-11,w,22); ctx.fillStyle=col; ctx.font='bold 12px system-ui'; ctx.fillText(txt,W-padR+15,y+4); ctx.font='12px system-ui'; });
+  // candles revealed
+  t.candles.slice(0,ci+1).forEach((c,i)=>{ const x=X(i); ctx.strokeStyle='#111'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,Y(c.h)); ctx.lineTo(x,Y(c.l)); ctx.stroke();
+    const col=c.c>=c.o?'#26a69a':'#ef5350'; ctx.fillStyle=col; ctx.strokeStyle='#111'; const y1=Y(Math.max(c.o,c.c)), y2=Y(Math.min(c.o,c.c)); ctx.fillRect(x-26,y1,52,Math.max(3,y2-y1)); ctx.strokeRect(x-26,y1,52,Math.max(3,y2-y1));
+    ctx.fillStyle='#111'; ctx.font='bold 12px system-ui'; ctx.textAlign='center'; ctx.fillText('Candle '+(i+1),x,H-12); ctx.fillText(fmt(c.c),x,y2+18); ctx.textAlign='left'; });
+  if(ci<0){ ctx.fillStyle='#111'; ctx.font='bold 18px system-ui'; ctx.textAlign='center'; ctx.fillText('Press NEXT CANDLE', (W-padR)/2+padL/2, H/2); ctx.textAlign='left'; }
+}
+
+function update(){
+  const t=trade();
+  $('tradePill').textContent='Trade '+(ti+1)+' / '+TRADES.length+'  —  '+t.name;
+  $('scorePill').textContent='Score: '+score+' / '+TRADES.length;
+  $('candlePill').textContent='Candle: '+Math.max(0,ci+1)+' / 3';
+  $('info').innerHTML='<b>'+t.dir+'</b> at <span class="blue"><b>'+fmt(t.entry)+'</b></span> &nbsp;|&nbsp; '+
+    '<span class="red">SL '+fmt(t.sl)+'</span> &nbsp;|&nbsp; <span class="green">TP '+fmt(t.tp)+'</span><br>'+
+    '<span class="orange"><b>Your rule before entry: '+t.exitText+'</b></span>';
+  draw();
+}
+function setFb(txt,cls){ const f=$('feedback'); f.textContent=txt; f.className='feedback '+(cls||''); }
+function endTrade(clean,msg){
+  awaiting=false; $('holdBtn').disabled=true; $('outBtn').disabled=true;
+  if(clean && tradeClean){ score++; }
+  setFb(msg, (clean&&tradeClean)?'good':'bad'); update();
+  $('nextBtn').textContent = (ti===TRADES.length-1) ? '✓ FINISH — SEE SCORE' : '▶ NEXT TRADE';
+  $('nextBtn').disabled=false; finished=false; ci=99; // marker: next button moves to next trade
+  drawEndNote();
+}
+function drawEndNote(){ /* feedback box carries the result; chart keeps revealed candles */ updatePillsOnly(); }
+function updatePillsOnly(){ $('scorePill').textContent='Score: '+score+' / '+TRADES.length; $('tradePill').textContent='Trade '+(ti+1)+' / '+TRADES.length+'  —  '+trade().name; }
+
+$('nextBtn').onclick=()=>{
+  if(ci===99){ // move to next trade or finish
+    if(ti===TRADES.length-1){ setFb('DONE. Execution score: '+score+' / '+TRADES.length+(score>=4?' — Good. Exit finger is working. Do it again tomorrow.':' — This is the pattern to fix. Restart and beat it. Score is only about exiting at your line, not profit.'), score>=4?'good':'bad'); $('nextBtn').disabled=true; return; }
+    ti++; ci=-1; tradeClean=true; $('nextBtn').textContent='▶ NEXT CANDLE'; update(); setFb('New trade. Read your rule, then press NEXT CANDLE.',''); return;
+  }
+  if(awaiting) return;
+  ci++; update();
+  const c=trade().candles[ci];
+  if(c.action==='AUTO_TP'){ endTrade(true,'✅ '+c.why); return; }
+  if(c.action==='AUTO_SL'){ tradeClean = tradeClean; endTrade(true,'🛑 '+c.why+' (No point lost — SL is automatic, that is the lesson.)'); return; }
+  if(c.action==='AUTO'){ endTrade(false,c.why); return; }
+  awaiting=true; $('holdBtn').disabled=false; $('outBtn').disabled=false; $('nextBtn').disabled=true;
+  setFb('Candle '+(ci+1)+' closed at '+fmt(c.c)+'. HOLD or OUT?','');
+};
+function choose(act){
+  if(!awaiting) return;
+  const c=trade().candles[ci];
+  awaiting=false; $('holdBtn').disabled=true; $('outBtn').disabled=true;
+  if(act===c.action){
+    if(act==='OUT'){ endTrade(true,'✅ CORRECT — OUT. '+c.why); }
+    else { setFb('✅ Correct HOLD. '+c.why+' Press NEXT CANDLE.','good'); $('nextBtn').disabled=false; }
+  } else {
+    tradeClean=false;
+    if(act==='HOLD' && c.action==='OUT'){ endTrade(false,'❌ Wrong. Answer was OUT. '+c.why+' '+(c.failNext||'')); }
+    else { endTrade(false,'❌ Wrong. Too early. Answer was HOLD. '+c.why+' Exiting early for no reason is also a broken exit. Trade closed, no point.'); }
+  }
+  update();
+}
+$('holdBtn').onclick=()=>choose('HOLD');
+$('outBtn').onclick=()=>choose('OUT');
+$('restartBtn').onclick=()=>{ ti=0; ci=-1; score=0; tradeClean=true; awaiting=false; $('nextBtn').disabled=false; $('nextBtn').textContent='▶ NEXT CANDLE'; update(); setFb('Press NEXT CANDLE to start.',''); };
+update();
+</script>
+</body>
+</html>
